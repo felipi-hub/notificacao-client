@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Notificação de Produtos</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        * {
+            font-family: 'Inter', sans-serif;
+        }
+
+        .glass-effect {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+        }
+
+        .animate-pulse-slow {
+            animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateY(-20px);
+                opacity: 0;
+            }
+
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .slide-in {
+            animation: slideIn 0.3s ease-out forwards;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .modal-enter {
+            animation: modalEnter 0.3s ease-out;
+        }
+
+        @keyframes modalEnter {
+            from {
+                opacity: 0;
+                transform: scale(0.9);
+            }
+
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        .nav-item.active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        /* Mobile bottom navigation */
+        @media (max-width: 768px) {
+            .mobile-nav {
+                position: fixed;
+                bottom: 0;
+                left: 0;
+                right: 0;
+                z-index: 50;
+            }
+
+            .main-content {
+                padding-bottom: 80px;
+            }
+        }
+
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+
+<body class="bg-gray-100 min-h-screen">
+    <div id="app"></div>
+
+    <script>
+        // ==================== INDEXEDDB SETUP ====================
+        const DB_NAME = 'NotificacaoProdutosDB';
+        const DB_VERSION = 1;
+        let db;
+
+        function initDB() {
+            return new Promise((resolve, reject) => {
+                const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+                request.onupgradeneeded = (event) => {
+                    db = event.target.result;
+
+                    if (!db.objectStoreNames.contains('pedidos')) {
+                        const store = db.createObjectStore('pedidos', { keyPath: 'id', autoIncrement: true });
+                        store.createIndex('cliente', 'cliente', { unique: false });
+                        store.createIndex('status', 'status', { unique: false });
+                        store.createIndex('data', 'dataCriacao', { unique: false });
+                    }
+
+                    if (!db.objectStoreNames.contains('atualizacoes')) {
+                        db.createObjectStore('atualizacoes', { keyPath: 'id', autoIncrement: true });
+                    }
+                };
+
+                request.onsuccess = (event) => {
+                    db = event.target.result;
+                    resolve(db);
+                };
+
+                request.onerror = (event) => {
+                    console.error('Erro noIndexedDB:', event.target.error);
+                    reject(event.target.error);
+                };
+            });
+        }
+
+        // CRUD Operations
+        async function addPedido(pedido) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['pedidos'], 'readwrite');
+                const store = transaction.objectStore('pedidos');
+                pedido.dataCriacao = new Date().toISOString();
+                const request = store.add(pedido);
+
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function getAllPedidos() {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['pedidos'], 'readonly');
+                const store = transaction.objectStore('pedidos');
+                const request = store.getAll();
+
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function getPedidoById(id) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['pedidos'], 'readonly');
+                const store = transaction.objectStore('pedidos');
+                const request = store.get(parseInt(id));
+
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function updatePedido(id, updates) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['pedidos'], 'readwrite');
+                const store = transaction.objectStore('pedidos');
+                const request = store.get(parseInt(id));
+
+                request.onsuccess = (event) => {
+                    const pedido = event.target.result;
+                    Object.assign(pedido, updates);
+                    const updateRequest = store.put(pedido);
+                    updateRequest.onsuccess = () => resolve(updateRequest.result);
+                    updateRequest.onerror = () => reject(updateRequest.error);
+                };
+
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function deletePedido(id) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['pedidos'], 'readwrite');
+                const store = transaction.objectStore('pedidos');
+                const request = store.delete(parseInt(id));
+
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // Atualizações
+        async function addAtualizacao(atualizacao) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['atualizacoes'], 'readwrite');
+                const store = transaction.objectStore('atualizacoes');
+                atualizacao.dataCriacao = new Date().toISOString();
+                const request = store.add(atualizacao);
+
+                request.onsuccess = () => resolve(request.result);
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        async function getAtualizacoesPorPedido(pedidoId) {
+            return new Promise((resolve, reject) => {
+                const transaction = db.transaction(['atualizacoes'], 'readonly');
+                const store = transaction.objectStore('atualizacoes');
+                const request = store.getAll();
+
+                request.onsuccess = () => {
+                    const allAtualizacoes = request.result;
+                    const atualizacoesDoPedido = allAtualizacoes.filter(a => a.pedidoId === parseInt(pedidoId));
+                    atualizacoesDoPedido.sort((a, b) => new Date(b.dataCriacao) - new Date(a.dataCriacao));
+                    resolve(atualizacoesDoPedido);
+                };
+
+                request.onerror = () => reject(request.error);
+            });
+        }
+
+        // ==================== APP STATE ====================
+        let appState = {
+            currentView: 'dashboard',
+            pedidos: [],
+            selectedPedido: null,
+            showToast: false,
+            toastMessage: '',
+            toastType: 'success'
+        };
+
+        // ==================== HELPER FUNCTIONS ====================
+        function formatDate(dateString) {
+            const date = new Date(dateString);
+            return date.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short', year: 'numeric' });
+        }
+
+        function getStatusBadge(status) {
+            const badges = {
+                'pendente': 'bg-yellow-100 text-yellow-800 border-yellow-300',
+                'enviado': 'bg-blue-100 text-blue-800 border-blue-300',
+                'em_trnsito': 'bg-purple-100 text-purple-800 border-purple-300',
+                'entregue': 'bg-green-100 text-green-800 border-green-300',
+                'cancelado': 'bg-red-100 text-red-800 border-red-300'
+            };
+            return badges[status] || 'bg-gray-100 text-gray-800 border-gray-300';
+        }
+
+        function getStatusText(status) {
+            const texts = {
+                'pendente': 'Pendente',
+                'enviado': 'Enviado',
+                'em_trnsito': 'Em Trânsito',
+                'entregue': 'Entregue',
+                'cancelado': 'Cancelado'
+            };
+            return texts[status] || status;
+        }
+
+        function formatCurrency(value) {
+            return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+        }
+
+        function generateWhatsAppLink(message, phoneNumber) {
+            const cleanNumber = phoneNumber.replace(/\D/g, '');
+            return `https://wa.me/${cleanNumber}?text=${encodeURIComponent(message)}`;
+        }
+
+        function showToast(message, type = 'success') {
+            appState.showToast = true;
+            appState.toastMessage = message;
+            appState.toastType = type;
+            setTimeout(() => {
+                appState.showToast = false;
+            }, 3000);
+        }
+
+        // ==================== VIEW COMPONENTS ====================
+        function createDashboardView() {
+            const sortedPedidos = [...appState.pedidos].sort((a, b) =>
+                new Date(b.dataCriacao) - new Date(a.dataCriacao)
+            );
+
+            const stats = {
+                total: sortedPedidos.length,
+                pendente: sortedPedidos.filter(p => p.status === 'pendente').length,
+                enviado: sortedPedidos.filter(p => p.status === 'enviado' || p.status === 'em_trnsito').length,
+                entregue: sortedPedidos.filter(p => p.status === 'entregue').length
+            };
+
+            return `
+                <div class="p-4 main-content">
+                    <header class="mb-6">
+                        <h1 class="text-2xl font-bold text-gray-800 mb-2">📦 Dashboard de Pedidos</h1>
+                        <p class="text-gray-600">Gerencie seus pedidos e notificações de clientes</p>
+                    </header>
+                    
+                    <!-- Stats Cards -->
+                    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+                        <div class="bg-white rounded-xl p-4 shadow-sm border border-gray-200">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-gray-500 text-xs">Total</p>
+                                    <p class="text-2xl font-bold text-gray-800">${stats.total}</p>
+                                </div>
+                                <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                                    <i class="fas fa-box text-blue-600"></i>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-white rounded-xl p-4 shadow-sm border border-gray-200">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-gray-500 text-xs">Pendente</p>
+                                    <p class="text-2xl font-bold text-yellow-600">${stats.pendente}</p>
+                                </div>
+                                <div class="w-10 h-10 bg-yellow-100 rounded-full flex items-center justify-center">
+                                    <i class="fas fa-clock text-yellow-600"></i>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-white rounded-xl p-4 shadow-sm border border-gray-200">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-gray-500 text-xs">Trânsito</p>
+                                    <p class="text-2xl font-bold text-blue-600">${stats.enviado}</p>
+                                </div>
+                                <div class="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center">
+                                    <i class="fas fa-shipping-fast text-blue-600"></i>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="bg-white rounded-xl p-4 shadow-sm border border-gray-200">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-gray-500 text-xs">Entregues</p>
+                                    <p class="text-2xl font-bold text-green-600">${stats.entregue}</p>
+                                </div>
+                                <div class="w-10 h-10 bg-green-100 rounded-full flex items-center justify-center">
+                                    <i class="fas fa-check-circle text-green-600"></i>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Search and Filter -->
+                    <div class="bg-white rounded-xl p-4 shadow-sm border border-gray-200 mb-4">
+                        <div class="flex flex-col sm:flex-row gap-3">
+                            <input 
+                                type="text" 
+                                placeholder="🔍 Buscar por cliente ou produto..." 
+                                class="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                oninput="filterPedidos(this.value)"
+                                id="searchInput"
+                            >
+                            <select 
+                                class="px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                onchange="filterByStatus(this.value)"
+                                id="statusFilter"
+                            >
+                                <option value="">Todos Status</option>
+                                <option value="pendente">Pendente</option>
+                                <option value="enviado">Enviado</option>
+                                <option value="em_trnsito">Em Trânsito</option>
+                                <option value="entregue">Entregue</option>
+                                <option value="cancelado">Cancelado</option>
+                            </select>
+                            <button onclick="addNewPedido()" class="bg-gradient-to-r from-indigo-600 to-purple-600 text-white px-4 py-2 rounded-lg hover:from-indigo-700 hover:to-purple-700 transition-all">
+                                <i class="fas fa-plus mr-2"></i>Novo Pedido
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- Pedidos List -->
+                    <div class="space-y-3">
+                        ${sortedPedidos.length === 0 ? `
+                            <div class="bg-white rounded-xl p-8 shadow-sm border border-gray-200 text-center">
+                                <i class="fas fa-box-open text-6xl text-gray-300 mb-4"></i>
+                                <h3 class="text-lg font-semibold text-gray-700 mb-2">Nenhum pedido encontrado</h3>
+                                <p class="text-gray-500 mb-4">Comece adicionando seu primeiro pedido</p>
+                                <button onclick="addNewPedido()" class="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition-all">
+                                    Adicionar Pedido
+                                </button>
+                            </div>
+                        ` : sortedPedidos.map(pedido => `
+                            <div class="bg-white rounded-xl p-4 shadow-sm border border-gray-200 hover:shadow-md transition-shadow cursor-pointer" onclick="viewPedido(${pedido.id})">
+                                <div class="flex items-start justify-between">
+                                    <div class="flex-1">
+                                        <div class="flex items-center gap-2 mb-2">
+                                            <h3 class="font-semibold text-gray-800">${pedido.cliente}</h3>
+                                            <span class="status-dot ${getStatusDot(pedido.status)}"></span>
+                                            <span class="text-xs px-2 py-1 rounded-full border ${getStatusBadge(pedido.status)}">
+                                                ${getStatusText(pedido.status)}
+                                            </span>
+                                        </div>
+                                        <p class="text-sm text-gray-600 mb-1"><i class="fas fa-product text-gray-400 mr-2"></i>${pedido.produto}</p>
+                                        <p class="text-sm text-gray-600"><i class="fas fa-whatsapp text-gray-400 mr-2"></i>${pedido.telefone}</p>
+                                        ${pedido.rastreio ? `<p class="text-sm text-gray-500 mt-1"><i class="fas fa-barcode text-gray-400 mr-2"></i>Rastreio: ${pedido.rastreio}</p>` : ''}
+                                    </div>
+                                    <div class="text-right">
+                                        <p class="text-lg font-bold text-indigo-600">${formatCurrency(pedido.valor)}</p>
+                                        <p class="text-xs text-gray-500">${formatDate(pedido.dataCriacao)}</p>
+                                        <button 
+                                            onclick="event.stopPropagation(); sendWhatsAppNotification(${pedido.id})" 
+                                            class="mt-2 px-3 py-1 bg-green-500 text-white rounded-lg text-sm hover:bg-green-600 transition-colors"
+                                        >
+                                            <i class="fab fa-whatsapp mr-1"></i>Notificar
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function getStatusDot(status) {
+            const dots = {
+                'pendente': 'bg-yellow-400',
+                'enviado': 'bg-blue-400',
+                'em_trnsito': 'bg-purple-400',
+                'entregue': 'bg-green-400',
+                'cancelado': 'bg-red-400'
+            };
+            return dots[status] || 'bg-gray-400';
+        }
+
+        function createPedidoForm(isEdit = false) {
+            const pedido = isEdit && appState.selectedPedido ? appState.selectedPedido : {};
+
+            return `
+                <div class="p-4 main-content">
+                    <div class="max-w-2xl mx-auto">
+                        <div class="flex items-center justify-between mb-6">
+                            <h1 class="text-2xl font-bold text-gray-800">${isEdit ? '✏️ Editar Pedido' : '➕ Novo Pedido'}</h1>
+                            <button onclick="goBack()" class="text-gray-500 hover:text-gray-700">
+                                <i class="fas fa-arrow-left"></i> Voltar
+                            </button>
+                        </div>
+                        
+                        <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+                            <form onsubmit="savePedido(event)" class="space-y-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">Nome do Cliente *</label>
+                                    <input type="text" name="cliente" required 
+                                           value="${pedido.cliente || ''}"
+                                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        >
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">Telefone WhatsApp *</label>
+                                    <input type="tel" name="telefone" required 
+                                           placeholder="(11) 99999-9999"
+                                           value="${pedido.telefone || ''}"
+                                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        >
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">Produto *</label>
+                                    <input type="text" name="produto" required 
+                                           value="${pedido.produto || ''}"
+                                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        >
+                                </div>
+                                
+                                <div class="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Valor (R$) *</label>
+                                        <input type="number" name="valor" step="0.01" required 
+                                               value="${pedido.valor || ''}"
+                                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                            >
+                                    </div>
+                                    
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Data Estimada *</label>
+                                        <input type="date" name="dataEstimada" required 
+                                               value="${pedido.dataEstimada || ''}"
+                                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                            >
+                                    </div>
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">Código de Rastreio</label>
+                                    <input type="text" name="rastreio" 
+                                           placeholder="EX123456789BR"
+                                           value="${pedido.rastreio || ''}"
+                                           class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        >
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">Status</label>
+                                    <select name="status" required 
+                                            class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                        >
+                                        <option value="pendente" ${pedido.status === 'pendente' ? 'selected' : ''}>Pendente</option>
+                                        <option value="enviado" ${pedido.status === 'enviado' ? 'selected' : ''}>Enviado</option>
+                                        <option value="em_trnsito" ${pedido.status === 'em_trnsito' ? 'selected' : ''}>Em Trânsito</option>
+                                        <option value="entregue" ${pedido.status === 'entregue' ? 'selected' : ''}>Entregue</option>
+                                        <option value="cancelado" ${pedido.status === 'cancelado' ? 'selected' : ''}>Cancelado</option>
+                                    </select>
+                                </div>
+                                
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">Observações</label>
+                                    <textarea name="observacoes" rows="3" 
+                                              class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                    >${pedido.observacoes || ''}</textarea>
+                                </div>
+                                
+                                <div class="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+                                    <p class="text-sm text-yellow-800">
+                                        <i class="fas fa-info-circle mr-2"></i>
+                                        <strong>Informações importantes:</strong> Os produtos vêm do Brasil. Prazo estimado é de 30-40 dias devido ao transporte internacional. Poderá haver atrasos.
+                                    </p>
+                                </div>
+                                
+                                <div class="flex gap-3 pt-4">
+                                    <button type="submit" 
+                                            class="flex-1 bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-3 rounded-lg hover:from-indigo-700 hover:to-purple-700 transition-all font-medium">
+                                        ${isEdit ? '💾 Salvar Alterações' : '✅ Criar Pedido'}
+                                    </button>
+                                    ${isEdit ? `
+                                        <button type="button" onclick="deletePedidoCurrent()" 
+                                                class="px-6 py-3 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-all">
+                                            🗑️ Excluir
+                                        </button>
+                                    ` : ''}
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function createPedidoDetail() {
+            if (!appState.selectedPedido) return '';
+
+            const pedido = appState.selectedPedido;
+            const atualizacoes = pedido.atualizacoes || [];
+
+            return `
+                <div class="p-4 main-content">
+                    <div class="max-w-4xl mx-auto">
+                        <div class="flex items-center justify-between mb-6">
+                            <div class="flex items-center gap-3">
+                                <button onclick="goBack()" class="text-gray-500 hover:text-gray-700">
+                                    <i class="fas fa-arrow-left"></i> Voltar
+                                </button>
+                                <h1 class="text-2xl font-bold text-gray-800">📋 Detalhes do Pedido</h1>
+                            </div>
+                            <div class="flex gap-2">
+                                <button onclick="editPedidoCurrent()" 
+                                        class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-all">
+                                    <i class="fas fa-edit mr-2"></i>Edit
+                                </button>
+                                <button onclick="sendWhatsAppNotification(${pedido.id})" 
+                                        class="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-all">
+                                    <i class="fab fa-whatsapp mr-2"></i>Notificar
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <!-- Customer Info -->
+                            <div class="lg:col-span-2 space-y-6">
+                                <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+                                    <h2 class="text-lg font-semibold text-gray-800 mb-4">👤 Informações do Cliente</h2>
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <p class="text-sm text-gray-500">Cliente</p>
+                                            <p class="font-medium text-gray-800">${pedido.cliente}</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-sm text-gray-500">Telefone</p>
+                                            <p class="font-medium text-gray-800">${pedido.telefone}</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-sm text-gray-500">Produto</p>
+                                            <p class="font-medium text-gray-800">${pedido.produto}</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-sm text-gray-500">Valor</p>
+                                            <p class="font-medium text-green-600 text-lg">${formatCurrency(pedido.valor)}</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-sm text-gray-500">Rastreio</p>
+                                            <p class="font-medium text-gray-800">${pedido.rastreio || 'Não informado'}</p>
+                                        </div>
+                                        <div>
+                                            <p class="text-sm text-gray-500">Status</p>
+                                            <span class="inline-block px-3 py-1 rounded-full text-sm font-medium ${getStatusBadge(pedido.status)}">
+                                                ${getStatusText(pedido.status)}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <!-- Timeline -->
+                                <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+                                    <div class="flex items-center justify-between mb-4">
+                                        <h2 class="text-lg font-semibold text-gray-800">📅 Linha do Tempo</h2>
+                                        <button onclick="addUpdate(${pedido.id})" class="text-sm text-indigo-600 hover:text-indigo-700">
+                                            <i class="fas fa-plus mr-1"></i>Adicionar Atualização
+                                        </button>
+                                    </div>
+                                    
+                                    <div class="relative">
+                                        ${atualizacoes.length === 0 ? `
+                                            <div class="text-center py-8 text-gray-400">
+                                                <i class="fas fa-clock text-4xl mb-3"></i>
+                                                <p>Nenhuma atualização registrada</p>
+                                            </div>
+                                        ` : atualizacoes.map((update, index) => `
+                                            <div class="flex gap-4 mb-6 last:mb-0">
+                                                <div class="flex flex-col items-center">
+                                                    <div class="w-10 h-10 rounded-full ${getUpdateStatusColor(update.status)} flex items-center justify-center">
+                                                        <i class="fas ${getUpdateIcon(update.status)}"></i>
+                                                    </div>
+                                                    ${index !== atualizacoes.length - 1 ? '<div class="w-0.5 flex-1 bg-gray-200 my-2"></div>' : ''}
+                                                </div>
+                                                <div class="flex-1 bg-gray-50 rounded-lg p-4">
+                                                    <div class="flex items-center justify-between mb-2">
+                                                        <span class="text-sm font-medium ${getUpdateStatusColor(update.status)}">${update.titulo}</span>
+                                                        <span class="text-xs text-gray-500">${formatDate(update.dataCriacao)}</span>
+                                                    </div>
+                                                    <p class="text-sm text-gray-600">${update.descricao}</p>
+                                                    ${update.evidencias?.length ? `
+                                                        <div class="mt-3 flex flex-wrap gap-2">
+                                                            ${update.evidencias.map(ev => `
+                                                                <span class="px-2 py-1 bg-gray-200 rounded text-xs">${ev}</span>
+                                                            `).join('')}
+                                                        </div>
+                                                    ` : ''}
+                                                </div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                                
+                                <!-- Transparencia Alert -->
+                                <div class="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl p-6 border border-blue-200">
+                                    <div class="flex items-start gap-3">
+                                        <i class="fas fa-info-circle text-blue-600 mt-1"></i>
+                                        <div>
+                                            <h3 class="font-semibold text-blue-800 mb-2">Transparência com o Cliente</h3>
+                                            <ul class="text-sm text-blue-700 space-y-1">
+                                                <li>✓ Os produtos vêm diretamente do Brasil</li>
+                                                <li>✓ Prazo estimado: 30-40 dias úteis</li>
+                                                <li>✓ Atrasos podem ocorrer no transporte internacional</li>
+                                                <li>✓ Enviamos comprovantes, fotos e rastreios</li>
+                                                <li>✓ Atualizamos mesmo sem novidades</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <!-- Sidebar -->
+                            <div class="space-y-6">
+                                <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+                                    <h3 class="font-semibold text-gray-800 mb-4">Ações Rápidas</h3>
+                                    <div class="space-y-3">
+                                        <button onclick="quickUpdate(${pedido.id}, 'enviado')" 
+                                                class="w-full flex items-center gap-3 px-4 py-3 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors">
+                                            <i class="fas fa-truck text-blue-600"></i>
+                                            <span class="text-left">
+                                                <p class="font-medium text-gray-800">Registro de Envio</p>
+                                                <p class="text-xs text-gray-500">Enviar comprovante ao cliente</p>
+                                            </span>
+                                        </button>
+                                        
+                                        <button onclick="quickUpdate(${pedido.id}, 'atraso')" 
+                                                class="w-full flex items-center gap-3 px-4 py-3 bg-yellow-50 hover:bg-yellow-100 rounded-lg transition-colors">
+                                            <i class="fas fa-exclamation-triangle text-yellow-600"></i>
+                                            <span class="text-left">
+                                                <p class="font-medium text-gray-800">Comunicar Atraso</p>
+                                                <p class="text-xs text-gray-500">Informar sobre demora</p>
+                                            </span>
+                                        </button>
+                                        
+                                        <button onclick="quickUpdate(${pedido.id}, 'feedback')" 
+                                                class="w-full flex items-center gap-3 px-4 py-3 bg-green-50 hover:bg-green-100 rounded-lg transition-colors">
+                                            <i class="fas fa-star text-green-600"></i>
+                                            <span class="text-left">
+                                                <p class="font-medium text-gray-800">Solicitar Feedback</p>
+                                                <p class="text-xs text-gray-500">Pedir avaliação do cliente</p>
+                                            </span>
+                                        </button>
+                                        
+                                        <button onclick="quickUpdate(${pedido.id}, 'finalizado')" 
+                                                class="w-full flex items-center gap-3 px-4 py-3 bg-purple-50 hover:bg-purple-100 rounded-lg transition-colors">
+                                            <i class="fas fa-check-double text-purple-600"></i>
+                                            <span class="text-left">
+                                                <p class="font-medium text-gray-800">Pedido Finalizado</p>
+                                                <p class="text-xs text-gray-500">Encerrar acompanhamento</p>
+                                            </span>
+                                        </button>
+                                    </div>
+                                </div>
+                                
+                                <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+                                    <h3 class="font-semibold text-gray-800 mb-4">Modelo de Mensagem</h3>
+                                    <div class="bg-gray-50 rounded-lg p-4 text-sm text-gray-600">
+                                        <p class="mb-2"><strong>Olá ${pedido.cliente}! 👋</strong></p>
+                                        <p class="mb-2">Tudo bem? Passando para atualizar você sobre o seu pedido do <strong>${pedido.produto}</strong>.</p>
+                                        <p class="mb-2">📍 O produto já foi enviado do Brasil!</p>
+                                        <p class="mb-2">📦 Código de rastreio: <strong>${pedido.rastreio || 'Aguardando'}</strong></p>
+                                        <p class="mb-2">⏰ Prazo estimado: 30-40 dias devido ao transporte internacional.</p>
+                                        <p>Vou te manter sempre informado! Qualquer dúvida, estou à disposição.</p>
+                                        <p class="mt-2 text-xs text-gray-500">Seu feedback é muito importante para nós! ⭐</p>
+                                    </div>
+                                    <button onclick="copyTemplate()" 
+                                            class="w-full mt-3 px-4 py-2 bg-indigo-500 text-white rounded-lg hover:bg-indigo-600 transition-all text-sm">
+                                        📋 Copiar Modelo
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function getUpdateStatusColor(status) {
+            const colors = {
+                'created': 'text-gray-600',
+                'enviado': 'text-blue-600',
+                'em_trnsito': 'text-purple-600',
+                'atraso': 'text-yellow-600',
+                'entregue': 'text-green-600',
+                'feedback': 'text-pink-600'
+            };
+            return colors[status] || 'text-gray-600';
+        }
+
+        function getUpdateIcon(status) {
+            const icons = {
+                'created': 'fa-calendar',
+                'enviado': 'fa-truck',
+                'em_trnsito': 'fa-shipping-fast',
+                'atraso': 'fa-exclamation-triangle',
+                'entregue': 'fa-check-circle',
+                'feedback': 'fa-star'
+            };
+            return icons[status] || 'fa-info-circle';
+        }
+
+        function createNavigation() {
+            return `
+                <nav class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 mobile-nav">
+                    <div class="flex justify-around py-3">
+                        <button onclick="switchView('dashboard')" class="nav-item active flex flex-col items-center px-4">
+                            <i class="fas fa-home text-xl mb-1"></i>
+                            <span class="text-xs">Início</span>
+                        </button>
+                        <button onclick="switchView('newPedido')" class="nav-item flex flex-col items-center px-4">
+                            <i class="fas fa-plus text-xl mb-1"></i>
+                            <span class="text-xs">Novo</span>
+                        </button>
+                        <button onclick="switchView('settings')" class="nav-item flex flex-col items-center px-4">
+                            <i class="fas fa-cog text-xl mb-1"></i>
+                            <span class="text-xs">Config</span>
+                        </button>
+                    </div>
+                </nav>
+            `;
+        }
+
+        function createSettingsView() {
+            return `
+                <div class="p-4 main-content">
+                    <div class="max-w-2xl mx-auto">
+                        <h1 class="text-2xl font-bold text-gray-800 mb-6">⚙️ Configurações</h1>
+                        
+                        <div class="space-y-6">
+                            <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+                                <h2 class="text-lg font-semibold text-gray-800 mb-4">Prazos e Avisos</h2>
+                                <div class="space-y-4">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Prazo Mínimo (dias)</label>
+                                        <input type="number" id="minDays" value="30" 
+                                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                        <p class="text-xs text-gray-500 mt-1">Use um prazo maior que o normal para evitar frustrações</p>
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Prazo Máximo (dias)</label>
+                                        <input type="number" id="maxDays" value="45" 
+                                               class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+                                <h2 class="text-lg font-semibold text-gray-800 mb-4">Mensagem Padrão</h2>
+                                <textarea id="defaultMessage" rows="6"
+                                          class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                                >Olá! Tudo bem?
+
+Passando para atualizar você sobre o seu pedido.
+
+📍 Produto vindo do Brasil
+📦 Código de rastreio: [CODIGO]
+⏰ Prazo estimado: 30-40 dias
+⚠️ Podem ocorrer atrasos no transporte internacional
+
+Vou te manter sempre informado!
+
+Seu feedback é muito importante! ⭐
+
+Obrigado pela preferência!</textarea>
+                            </div>
+                            
+                            <div class="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
+                                <h2 class="text-lg font-semibold text-gray-800 mb-4">🔐 Banco de Dados</h2>
+                                <div class="space-y-3">
+                                    <div class="flex justify-between items-center">
+                                        <span class="text-gray-600">Pedidos cadastrados</span>
+                                        <span class="font-semibold text-indigo-600">${appState.pedidos.length}</span>
+                                    </div>
+                                    <button onclick="exportData()" class="w-full py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
+                                        💾 Exportar Dados
+                                    </button>
+                                    <button onclick="clearAllData()" class="w-full py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors">
+                                        🗑️ Limpar Tudo
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl p-6 border border-indigo-200">
+                                <h3 class="font-semibold text-indigo-800 mb-3">💡 Dicas Importantes</h3>
+                                <ul class="text-sm text-indigo-700 space-y-2">
+                                    <li>✓ Seja transparente desde o início</li>
+                                    <li>✓ Mostre provas reais (fotos, comprovantes, prints)</li>
+                                    <li>✓ Atualize sempre, mesmo sem novidades</li>
+                                    <li>✓ Use prazos mais longos para proteger seu negócio</li>
+                                    <li>✓ Peça feedback após entrega</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // ==================== APP LOGIC ====================
+        function renderApp() {
+            const app = document.getElementById('app');
+
+            let content = '';
+            switch (appState.currentView) {
+                case 'dashboard':
+                    content = createDashboardView();
+                    break;
+                case 'newPedido':
+                case 'editPedido':
+                    content = createPedidoForm(appState.currentView === 'editPedido');
+                    break;
+                case 'pedidoDetail':
+                    content = createPedidoDetail();
+                    break;
+                case 'settings':
+                    content = createSettingsView();
+                    break;
+            }
+
+            app.innerHTML = content + createNavigation();
+            updateNavActive();
+        }
+
+        function switchView(view) {
+            appState.currentView = view;
+            renderApp();
+        }
+
+        function updateNavActive() {
+            const navItems = document.querySelectorAll('.nav-item');
+            navItems.forEach(item => {
+                if (item.querySelector('i').classList.contains(
+                    appState.currentView === 'dashboard' ? 'fa-home' :
+                        appState.currentView === 'newPedido' || appState.currentView === 'editPedido' ? 'fa-plus' :
+                            'fa-cog'
+                )) {
+                    item.classList.add('active');
+                } else {
+                    item.classList.remove('active');
+                }
+            });
+        }
+
+        function goBack() {
+            if (appState.currentView === 'newPedido' || appState.currentView === 'editPedido') {
+                switchView('dashboard');
+            } else if (appState.currentView === 'pedidoDetail') {
+                switchView('dashboard');
+            }
+        }
+
+        // CRUD Functions
+        async function addNewPedido() {
+            appState.selectedPedido = null;
+            switchView('newPedido');
+        }
+
+        async function editPedidoCurrent() {
+            switchView('editPedido');
+        }
+
+        async function savePedido(e) {
+            e.preventDefault();
+            const form = e.target;
+            const data = new FormData(form);
+
+            const pedido = {
+                cliente: data.get('cliente'),
+                telefone: data.get('telefone'),
+                produto: data.get('produto'),
+                valor: parseFloat(data.get('valor')),
+                dataEstimada: data.get('dataEstimada'),
+                rastreio: data.get('rastreio') || null,
+                status: data.get('status'),
+                observacoes: data.get('observacoes') || null,
+                atualizacoes: []
+            };
+
+            try {
+                if (appState.currentView === 'editPedido') {
+                    await updatePedido(pedido.id, pedido);
+                    appState.pedidos = await getAllPedidos();
+                    appState.selectedPedido = null;
+                    showToast('Pedido atualizado com sucesso!');
+                } else {
+                    await addPedido(pedido);
+                    appState.pedidos = await getAllPedidos();
+                    showToast('Pedido criado com sucesso!');
+                }
+                switchView('dashboard');
+            } catch (error) {
+                console.error('Erro ao salvar:', error);
+                showToast('Erro ao salvar pedido', 'error');
+            }
+        }
+
+        async function deletePedidoCurrent() {
+            if (!confirm('Tem certeza que deseja excluir este pedido?')) return;
+
+            try {
+                await deletePedido(appState.selectedPedido.id);
+                appState.pedidos = await getAllPedidos();
+                appState.selectedPedido = null;
+                showToast('Pedido excluído com sucesso!');
+                switchView('dashboard');
+            } catch (error) {
+                console.error('Erro ao excluir:', error);
+                showToast('Erro ao excluir pedido', 'error');
+            }
+        }
+
+        async function viewPedido(id) {
+            appState.selectedPedido = await getPedidoById(id);
+            if (appState.selectedPedido) {
+                appState.selectedPedido.atualizacoes = await getAtualizacoesPorPedido(id);
+            }
+            switchView('pedidoDetail');
+        }
+
+        // Update Functions
+        async function addUpdate(pedidoId) {
+            const titulo = prompt('Título da atualização:');
+            if (!titulo) return;
+
+            const descricao = prompt('Descrição detalhada:');
+            if (!descricao) return;
+
+            const evidencias = prompt('Evidências (separadas por vírgula):', 'Foto, Comprovante, Print');
+
+            const atualizacao = {
+                pedidoId: pedidoId,
+                titulo: titulo,
+                descricao: descricao,
+                evidencias: evidencias ? evidencias.split(',').map(e => e.trim()) : [],
+                dataCriacao: new Date().toISOString()
+            };
+
+            try {
+                await addAtualizacao(atualizacao);
+                appState.selectedPedido = await getPedidoById(pedidoId);
+                appState.selectedPedido.atualizacoes = await getAtualizacoesPorPedido(pedidoId);
+                renderApp();
+                showToast('Atualização registrada com sucesso!');
+            } catch (error) {
+                showToast('Erro ao registrar atualização', 'error');
+            }
+        }
+
+        async function quickUpdate(pedidoId, tipo) {
+            const templates = {
+                'enviado': {
+                    titulo: 'Produto Enviado!',
+                    descricao: 'O produto foi enviado do Brasil e está em trânsito até você.',
+                    status: 'enviado'
+                },
+                'atraso': {
+                    titulo: 'Comunicado de Atraso',
+                    descricao: 'Infelizmente houve um atraso no transporte internacional. Já estamos acompanhando e assim que tivermos novidades, vamos te avisar imediatamente.',
+                    status: 'em_trnsito'
+                },
+                'feedback': {
+                    titulo: 'Pedido Recebido com Sucesso!',
+                    descricao: 'Seu pedido chegou! Ficamos felizes com sua preferência. Poderia deixar uma avaliação?',
+                    status: 'entregue'
+                },
+                'finalizado': {
+                    titulo: 'Pedido Finalizado',
+                    descricao: 'Todo o processo foi concluído com sucesso! Obrigada pela preferência.',
+                    status: 'entregue'
+                }
+            };
+
+            const template = templates[tipo];
+            if (!template) return;
+
+            await addAtualizacao({
+                pedidoId: pedidoId,
+                titulo: template.titulo,
+                descricao: template.descricao,
+                evidencias: ['Sistema'],
+                dataCriacao: new Date().toISOString()
+            });
+
+            await updatePedido(pedidoId, { status: template.status });
+
+            appState.selectedPedido = await getPedidoById(pedidoId);
+            appState.selectedPedido.atualizacoes = await getAtualizacoesPorPedido(pedidoId);
+            renderApp();
+            showToast(`Status atualizado: ${template.titulo}`);
+        }
+
+        // WhatsApp Functions
+        async function sendWhatsAppNotification(pedidoId) {
+            const pedido = await getPedidoById(pedidoId);
+            if (!pedido) return;
+
+            let mensagem = `*OLÁ ${pedido.cliente.toUpperCase()}! 👋*\n\n`;
+            mensagem += `Tudo bem? Passando para atualizar você sobre o seu pedido.\n\n`;
+            mensagem += `📦 *PRODUTO:* ${pedido.produto}\n`;
+            mensagem += `💰 *VALOR:* ${formatCurrency(pedido.valor)}\n`;
+            mensagem += `\n`;
+            mensagem += `*INFORMAÇÕES IMPORTANTES:*\n`;
+            mensagem += `✅ Os produtos vêm diretamente do BRASIL\n`;
+            mensagem += `⏰ Prazo estimado: 30-40 dias úteis\n`;
+            if (pedido.rastreio) {
+                mensagem += `📮 Código de rastreio: *${pedido.rastreio}*\n`;
+            }
+            mensagem += `⚠️ Podem ocorrer atrasos no transporte internacional\n\n`;
+
+            if (pedido.status === 'enviado' || pedido.status === 'em_trnsito') {
+                mensagem += `🚢 *EM TRÂNSITO!* Seu produto já saiu do Brasil e está a caminho. Vou te manter sempre informado!\n\n`;
+            } else if (pedido.status === 'entregue') {
+                mensagem += `🎉 *ENTREGUE!* Seu produto já chegou! Ficamos muito felizes!\n\n`;
+                mensagem += `⭐ *PRECISAMOS DO SEU FEEDBACK*\n`;
+                mensagem += `Sua opinião é super importante para nós. Poderia me dar uma estrelinha e contar como foi sua experiência?\n\n`;
+            }
+
+            mensagem += `Qualquer dúvida, estou à disposição!\n`;
+            mensagem += `\nObrigada pela preferência! 💝\n`;
+            mensagem += `_Envie esta mensagem para alguém que também possa se interessar_`;
+
+            const link = generateWhatsAppLink(mensagem, pedido.telefone);
+            window.open(link, '_blank');
+        }
+
+        function copyTemplate() {
+            const template = `Olá! Tudo bem?
+
+Passando para atualizar você sobre o seu pedido.
+
+📍 Produto vindo do Brasil
+📦 Código de rastreio: [CODIGO]
+⏰ Prazo estimado: 30-40 dias
+⚠️ Podem ocorrer atrasos no transporte internacional
+
+Vou te manter sempre informado!
+
+Seu feedback é muito importante! ⭐
+
+Obrigado pela preferência!`;
+
+            navigator.clipboard.writeText(template).then(() => {
+                showToast('Modelo copiado! Cole onde quiser.');
+            }).catch(() => {
+                showToast('Erro ao copiar modelo', 'error');
+            });
+        }
+
+        // Filters
+        function filterPedidos(query) {
+            query = query.toLowerCase();
+            const cards = document.querySelectorAll('.main-content > div > div:last-child > div:not(:first-child)');
+
+            cards.forEach(card => {
+                const text = card.textContent.toLowerCase();
+                card.style.display = text.includes(query) ? '' : 'none';
+            });
+        }
+
+        function filterByStatus(status) {
+            const cards = document.querySelectorAll('.main-content > div > div:last-child > div:not(:first-child)');
+
+            cards.forEach(card => {
+                const badge = card.querySelector('.rounded-full');
+                if (!status) {
+                    card.style.display = '';
+                } else if (badge && badge.textContent.toLowerCase().includes(getStatusText(status).toLowerCase())) {
+                    card.style.display = '';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        }
+
+        // Settings
+        function exportData() {
+            appState.pedidos = JSON.stringify(appState.pedidos);
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(appState.pedidos);
+            const downloadAnchorNode = document.createElement('a');
+            downloadAnchorNode.setAttribute("href", dataStr);
+            downloadAnchorNode.setAttribute("download", "pedidos_" + new Date().toISOString().split('T')[0] + ".json");
+            document.body.appendChild(downloadAnchorNode);
+            downloadAnchorNode.click();
+            downloadAnchorNode.remove();
+            showToast('Dados exportados com sucesso!');
+        }
+
+        function clearAllData() {
+            if (confirm('TEM CERTEZA? Isso irá apagar TODOS os pedidos e não poderá ser desfeito!')) {
+                const transaction = indexedDB.deleteDatabase(DB_NAME);
+                transaction.onsuccess = () => {
+                    appState.pedidos = [];
+                    location.reload();
+                };
+                transaction.onerror = () => {
+                    showToast('Erro ao limpar dados', 'error');
+                };
+            }
+        }
+
+        // Toast Notification
+        function renderToast() {
+            if (!appState.showToast) return '';
+
+            const bgColor = appState.toastType === 'error' ? 'bg-red-500' : 'bg-green-500';
+
+            return `
+                <div class="fixed top-4 left-1/2 transform -translate-x-1/2 z-50">
+                    <div class="${bgColor} text-white px-6 py-3 rounded-lg shadow-lg slide-in">
+                        <i class="fas ${appState.toastType === 'error' ? 'fa-times-circle' : 'fa-check-circle'} mr-2"></i>
+                        ${appState.toastMessage}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Initialize App
+        async function initializeApp() {
+            try {
+                await initDB();
+                appState.pedidos = await getAllPedidos();
+                renderApp();
+                console.log('App initialized with', appState.pedidos.length, 'pedidos');
+            } catch (error) {
+                console.error('Failed to initialize app:', error);
+                alert('Erro ao iniciar aplicação. Por favor, recarregue a página.');
+            }
+        }
+
+        // Start the app
+        document.addEventListener('DOMContentLoaded', initializeApp);
+    </script>
+</body>
+
+</html>
